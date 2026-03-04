@@ -311,7 +311,7 @@ export const ToolsWebSearchSchema = z
       .optional(),
     openai: z
       .object({
-        apiKey: z.string().optional().register(sensitive),
+        apiKey: SecretInputSchema.optional().register(sensitive),
         model: z.string().optional(),
         baseUrl: z.string().optional(),
       })

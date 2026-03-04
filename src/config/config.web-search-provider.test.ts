@@ -64,6 +64,22 @@ describe("web search provider config", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it("accepts openai provider config with SecretRef apiKey", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        enabled: true,
+        provider: "openai",
+        providerConfig: {
+          apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+          model: "gpt-5.2",
+          baseUrl: "https://api.openai.com",
+        },
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
 });
 
 describe("web search provider auto-detection", () => {
