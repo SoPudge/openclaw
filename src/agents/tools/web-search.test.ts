@@ -11,6 +11,7 @@ const {
   resolveGrokModel,
   resolveGrokInlineCitations,
   extractGrokContent,
+  extractOpenAIResponsesContent,
   resolveKimiApiKey,
   resolveKimiModel,
   resolveKimiBaseUrl,
@@ -219,6 +220,49 @@ describe("web_search grok response parsing", () => {
     } as Parameters<typeof extractGrokContent>[0]);
     expect(result.text).toBe("direct output text");
     expect(result.annotationCitations).toEqual(["https://example.com/direct"]);
+  });
+});
+
+describe("web_search openai response parsing", () => {
+  it("extracts content from Responses API message blocks", () => {
+    const result = extractOpenAIResponsesContent({
+      output: [
+        {
+          type: "message",
+          content: [{ type: "output_text", text: "hello from openai output" }],
+        },
+      ],
+    });
+    expect(result.text).toBe("hello from openai output");
+    expect(result.annotationCitations).toEqual([]);
+  });
+
+  it("extracts output_text blocks directly in output array", () => {
+    const result = extractOpenAIResponsesContent({
+      output: [
+        { type: "web_search_call" },
+        {
+          type: "output_text",
+          text: "direct openai output",
+          annotations: [
+            {
+              type: "url_citation",
+              url: "https://example.com/openai",
+              start_index: 0,
+              end_index: 5,
+            },
+          ],
+        },
+      ],
+    });
+    expect(result.text).toBe("direct openai output");
+    expect(result.annotationCitations).toEqual(["https://example.com/openai"]);
+  });
+
+  it("falls back to deprecated output_text", () => {
+    const result = extractOpenAIResponsesContent({ output_text: "fallback openai output_text" });
+    expect(result.text).toBe("fallback openai output_text");
+    expect(result.annotationCitations).toEqual([]);
   });
 });
 

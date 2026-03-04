@@ -31,6 +31,7 @@ const PERPLEXITY_SEARCH_ENDPOINT = "https://api.perplexity.ai/search";
 const XAI_API_ENDPOINT = "https://api.x.ai/v1/responses";
 const DEFAULT_GROK_MODEL = "grok-4-1-fast";
 const DEFAULT_OPENAI_SEARCH_MODEL = "gpt-5.2";
+const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com";
 const OPENAI_WEB_SEARCH_TOOL_TYPE = "web_search_preview";
 const DEFAULT_KIMI_BASE_URL = "https://api.moonshot.ai/v1";
 const DEFAULT_KIMI_MODEL = "moonshot-v1-128k";
@@ -213,7 +214,7 @@ type OpenAISearchConfig = {
   baseUrl?: string;
 };
 
-type GrokSearchResponse = {
+type ResponsesApiSearchResponse = {
   output?: Array<{
     type?: string;
     role?: string;
@@ -285,11 +286,10 @@ type PerplexitySearchApiResponse = {
   id?: string;
 };
 
-function extractGrokContent(data: GrokSearchResponse): {
+function extractResponsesApiContent(data: ResponsesApiSearchResponse): {
   text: string | undefined;
   annotationCitations: string[];
 } {
-  // xAI Responses API format: find the message output with text content
   for (const output of data.output ?? []) {
     if (output.type === "message") {
       for (const block of output.content ?? []) {
@@ -301,8 +301,6 @@ function extractGrokContent(data: GrokSearchResponse): {
         }
       }
     }
-    // Some xAI responses place output_text blocks directly in the output array
-    // without a message wrapper.
     if (
       output.type === "output_text" &&
       "text" in output &&
@@ -319,9 +317,22 @@ function extractGrokContent(data: GrokSearchResponse): {
       return { text: output.text, annotationCitations: [...new Set(urls)] };
     }
   }
-  // Fallback: deprecated output_text field
   const text = typeof data.output_text === "string" ? data.output_text : undefined;
   return { text, annotationCitations: [] };
+}
+
+function extractGrokContent(data: ResponsesApiSearchResponse): {
+  text: string | undefined;
+  annotationCitations: string[];
+} {
+  return extractResponsesApiContent(data);
+}
+
+function extractOpenAIResponsesContent(data: ResponsesApiSearchResponse): {
+  text: string | undefined;
+  annotationCitations: string[];
+} {
+  return extractResponsesApiContent(data);
 }
 
 type GeminiConfig = {
@@ -672,7 +683,7 @@ function resolveOpenAISearchBaseUrl(config?: OpenAISearchConfig): string {
     config && "baseUrl" in config && typeof config.baseUrl === "string"
       ? config.baseUrl.trim()
       : "";
-  return fromConfig || "https://api.openai.com";
+  return fromConfig || DEFAULT_OPENAI_BASE_URL;
 }
 
 async function withTrustedWebSearchEndpoint<T>(
@@ -1011,7 +1022,7 @@ async function runGrokSearch(params: {
 }): Promise<{
   content: string;
   citations: string[];
-  inlineCitations?: GrokSearchResponse["inline_citations"];
+  inlineCitations?: ResponsesApiSearchResponse["inline_citations"];
 }> {
   const body: Record<string, unknown> = {
     model: params.model,
@@ -1047,7 +1058,7 @@ async function runGrokSearch(params: {
         return await throwWebSearchApiError(res, "xAI");
       }
 
-      const data = (await res.json()) as GrokSearchResponse;
+      const data = (await res.json()) as ResponsesApiSearchResponse;
       const { text: extractedText, annotationCitations } = extractGrokContent(data);
       const content = extractedText ?? "No response";
       // Prefer top-level citations; fall back to annotation-derived ones
@@ -1066,7 +1077,9 @@ async function runOpenAISearch(params: {
   baseUrl: string;
   timeoutSeconds: number;
 }): Promise<{ content: string; citations: string[] }> {
-  const endpoint = `${params.baseUrl.trim().replace(/\/$/, "")}/v1/responses`;
+  const normalizedBaseUrl = params.baseUrl.trim().replace(/\/$/, "");
+  const apiPath = normalizedBaseUrl.endsWith("/v1") ? "/responses" : "/v1/responses";
+  const endpoint = `${normalizedBaseUrl}${apiPath}`;
   const body = {
     model: params.model,
     input: [{ role: "user", content: params.query }],
@@ -1091,8 +1104,8 @@ async function runOpenAISearch(params: {
         return await throwWebSearchApiError(res, "OpenAI");
       }
       // OpenAI Responses API format is identical to xAI's
-      const data = (await res.json()) as GrokSearchResponse;
-      const { text, annotationCitations } = extractGrokContent(data);
+      const data = (await res.json()) as ResponsesApiSearchResponse;
+      const { text, annotationCitations } = extractOpenAIResponsesContent(data);
       return {
         content: text ?? "No response",
         citations: (data.citations ?? []).length > 0 ? data.citations! : annotationCitations,
@@ -1285,7 +1298,7 @@ async function runWebSearch(params: {
         : params.provider === "kimi"
           ? `${params.kimiBaseUrl ?? DEFAULT_KIMI_BASE_URL}:${params.kimiModel ?? DEFAULT_KIMI_MODEL}`
           : params.provider === "openai"
-            ? `${params.openaiBaseUrl ?? "https://api.openai.com"}:${params.openaiModel ?? DEFAULT_OPENAI_SEARCH_MODEL}`
+            ? `${params.openaiBaseUrl ?? DEFAULT_OPENAI_BASE_URL}:${params.openaiModel ?? DEFAULT_OPENAI_SEARCH_MODEL}`
             : "";
   const cacheKey = normalizeCacheKey(
     `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}:${params.dateAfter || "default"}:${params.dateBefore || "default"}:${params.searchDomainFilter?.join(",") || "default"}:${params.maxTokens || "default"}:${params.maxTokensPerPage || "default"}:${providerSpecificKey}`,
@@ -1416,7 +1429,7 @@ async function runWebSearch(params: {
       query: params.query,
       apiKey: params.apiKey,
       model: params.openaiModel ?? DEFAULT_OPENAI_SEARCH_MODEL,
-      baseUrl: params.openaiBaseUrl ?? "https://api.openai.com",
+      baseUrl: params.openaiBaseUrl ?? DEFAULT_OPENAI_BASE_URL,
       timeoutSeconds: params.timeoutSeconds,
     });
 
@@ -1756,6 +1769,7 @@ export const __testing = {
   resolveGrokModel,
   resolveGrokInlineCitations,
   extractGrokContent,
+  extractOpenAIResponsesContent,
   resolveKimiApiKey,
   resolveKimiModel,
   resolveKimiBaseUrl,
