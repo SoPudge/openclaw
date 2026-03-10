@@ -100,3 +100,79 @@ TimeoutStartSec=90
 
 How `Restart=` policies help automated recovery:
 [systemd can automate service recovery](https://www.redhat.com/en/blog/systemd-automate-recovery).
+
+## Corporate proxy and SSL inspection
+
+If your VPS runs behind a corporate proxy with SSL inspection (common in enterprise networks),
+you need to configure environment variables explicitly in your systemd service file.
+
+### Key issues
+
+1. **systemd services don't read `/etc/environment`** — environment variables must be set
+   explicitly in the service file using `Environment=` directives.
+
+2. **Proxy environment variable case sensitivity** — some Node.js libraries (like `undici`)
+   check only uppercase `HTTP_PROXY`/`HTTPS_PROXY`, while others check lowercase variants.
+   **Best practice: set both.**
+
+3. **SSL certificate trust** — corporate proxies often perform SSL inspection (MITM), which
+   causes Node.js to reject connections with `SELF_SIGNED_CERT_IN_CHAIN` errors. You must
+   point Node.js to your corporate CA certificate.
+
+### Configuration example
+
+Edit your systemd service override:
+
+```bash
+sudo systemctl edit openclaw
+```
+
+Add the following environment variables:
+
+```ini
+[Service]
+# Proxy configuration (set both uppercase and lowercase)
+Environment=HTTP_PROXY=http://proxy.example.com:3127
+Environment=HTTPS_PROXY=http://proxy.example.com:3127
+Environment=http_proxy=http://proxy.example.com:3127
+Environment=https_proxy=http://proxy.example.com:3127
+
+# Corporate CA certificate for SSL inspection
+Environment=NODE_EXTRA_CA_CERTS=/path/to/corporate-ca.pem
+
+# Optional: bypass proxy for internal hosts
+Environment=no_proxy=127.0.0.1,localhost,.internal.example.com,10.0.0.0/8
+Environment=NO_PROXY=127.0.0.1,localhost,.internal.example.com,10.0.0.0/8
+```
+
+After editing, reload and restart:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart openclaw
+```
+
+### Troubleshooting
+
+If LLM requests still fail after configuration:
+
+1. **Verify proxy connectivity** with curl:
+   ```bash
+   curl -v --proxy http://proxy.example.com:3127 https://api.anthropic.com
+   ```
+
+2. **Check process environment** (verify vars are loaded):
+   ```bash
+   cat /proc/$(pgrep -f openclaw)/environ | tr '\0' '\n' | grep -i proxy
+   ```
+
+3. **Test Node.js fetch directly** to isolate SSL issues:
+   ```bash
+   node -e "const {EnvHttpProxyAgent, fetch} = require('undici'); \
+     fetch('https://api.anthropic.com', {dispatcher: new EnvHttpProxyAgent()}) \
+     .then(r => console.log('OK:', r.status)) \
+     .catch(e => console.error('Error:', e.cause || e))"
+   ```
+
+   - If you see `SELF_SIGNED_CERT_IN_CHAIN`, verify `NODE_EXTRA_CA_CERTS` points to the correct CA file.
+   - If you see connection timeout, verify the proxy URL and network reachability.
